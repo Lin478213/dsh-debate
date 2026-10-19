@@ -18,6 +18,8 @@ const LABELS = {
     duration: '耗时',
     participants: '参与角色',
     rounds: '轮次',
+    phaseTimings: '阶段耗时',
+    phaseNames: { round1: '第 1 轮', round2: '第 2 轮', judge: '裁判' },
     status: '状态',
     complete: '完整',
     incomplete: '不完整（见文末说明）',
@@ -58,6 +60,8 @@ const LABELS = {
     duration: 'Duration',
     participants: 'Participants',
     rounds: 'Rounds',
+    phaseTimings: 'Phase time',
+    phaseNames: { round1: 'Round 1', round2: 'Round 2', judge: 'Judge' },
     status: 'Status',
     complete: 'Complete',
     incomplete: 'Incomplete (see notes)',
@@ -235,6 +239,15 @@ function renderIncomplete(record, language) {
   return `> **${l.incompleteReasons}**\n>\n${reasons || '- —'}\n`
 }
 
+function renderTimings(timings, l) {
+  const parts = [
+    timings.round1Ms ? `${l.phaseNames.round1} ${formatDuration(timings.round1Ms)}` : '',
+    timings.round2Ms ? `${l.phaseNames.round2} ${formatDuration(timings.round2Ms)}` : '',
+    timings.judgeMs ? `${l.phaseNames.judge} ${formatDuration(timings.judgeMs)}` : '',
+  ].filter(Boolean)
+  return parts.join(' · ') || '—'
+}
+
 /** Render the full markdown report for one debate record. */
 export function renderReport(record, language = 'zh') {
   const l = labels(language)
@@ -254,6 +267,7 @@ export function renderReport(record, language = 'zh') {
     `| ${l.duration} | ${formatDuration(record.durationMs)} |`,
     `| ${l.participants} | ${cell(participants)} |`,
     `| ${l.rounds} | ${record.rounds ?? '—'} |`,
+    record.timings ? `| ${l.phaseTimings} | ${renderTimings(record.timings, l)} |` : '',
     `| ${l.status} | ${record.incomplete ? l.incomplete : l.complete} |`,
     '',
   ].join('\n')

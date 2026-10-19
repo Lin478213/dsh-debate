@@ -127,11 +127,11 @@ export async function runDebate(options) {
   }
   signal?.addEventListener('abort', onAbort, { once: true })
 
-  const speak = async (role, prompt, schema, callSignal) => {
+  const speak = async (role, prompt, schema, callSignal, allowTools = false) => {
     const childId = randomUUID()
     let activation
     active.add(childId)
-    trackChild(childId)
+    trackChild(childId, { tools: allowTools })
     try {
       callSignal.throwIfAborted()
       activation = await subagents.startActivation({
@@ -170,8 +170,10 @@ export async function runDebate(options) {
   const missingVoices = []
   const warnings = []
   const incompleteReasons = []
+  const timings = { round1Ms: 0, round2Ms: 0, judgeMs: 0 }
 
   try {
+    const r1Start = now()
     const debaterRoles = debaters.filter((role) => role && role.id)
     const first = await Promise.all(debaterRoles.map(async (role) => {
       try {
@@ -180,6 +182,7 @@ export async function runDebate(options) {
           buildRound1Prompt({ idea, role, language, contextPaths, cwd, hasTools: contextPaths.length > 0 }),
           ROUND1_SCHEMA,
           roundScope.signal,
+          contextPaths.length > 0,
         )
         return { role, result }
       } catch (error) {
@@ -187,25 +190,28 @@ export async function runDebate(options) {
       }
     }))
     if (userAborted) throw abortError()
+    timings.round1Ms = now() - r1Start
 
     for (const { role, result, error } of first) {
       if (error) {
         missingVoices.push(`${role.id}（${error?.message ?? '调用失败'}）`)
         continue
       }
-      if (!result?.structured || typeof result.structured !== 'object') {
-        missingVoices.push(`${role.id}（${result?.diagnostic ?? '未提交结构化陈词'}）`)
+      const structured = asStructured(result)
+      if (!structured) {
+        missingVoices.push(`${role.id}（${describeMissing(result)}）`)
         continue
       }
-      const speech = withPrefixedClaims(role.id, result.structured)
+      const speech = withPrefixedClaims(role.id, structured)
       round1[role.id] = speech
       const errors = validateRound1(speech)
       if (errors.length > 0) warnings.push(`第 1 轮 ${role.id}：${errors.join('；')}`)
     }
-    onUpdate({ phase: 'round1', round1 })
+    onUpdate({ id, phase: 'round1', round1 })
 
     const canRunSecond = rounds >= 2 && Object.keys(round1).length > 0 && !roundScope.signal.aborted
     if (canRunSecond) {
+      const r2Start = now()
       const second = await Promise.all(Object.keys(round1).map(async (speakerId) => {
         const role = debaterRoles.find((candidate) => candidate.id === speakerId)
         try {
@@ -214,6 +220,7 @@ export async function runDebate(options) {
             buildRound2Prompt({ idea, role, language, round1 }),
             ROUND2_SCHEMA,
             roundScope.signal,
+            contextPaths.length > 0,
           )
           return { role, result }
         } catch (error) {
@@ -221,15 +228,17 @@ export async function runDebate(options) {
         }
       }))
       if (userAborted) throw abortError()
+      timings.round2Ms = now() - r2Start
 
       const claims = claimMap(round1)
       for (const { role, result, error } of second) {
-        if (error || !result?.structured || typeof result.structured !== 'object') {
-          warnings.push(`第 2 轮 ${role.id} 未产出结构化反驳`)
+        const structured = error ? undefined : asStructured(result)
+        if (error || !structured) {
+          warnings.push(`第 2 轮 ${role.id} 未产出结构化反驳（${error ? (error?.message ?? '调用失败') : describeMissing(result)}）`)
           continue
         }
-        round2[role.id] = result.structured
-        const errors = validateRound2(result.structured, claims)
+        round2[role.id] = structured
+        const errors = validateRound2(structured, claims)
         if (errors.length > 0) {
           warnings.push(`第 2 轮 ${role.id}：${errors.join('；')}`)
           incompleteReasons.push(`第 2 轮 ${role.id} 的反驳不满足契约：${errors[0]}`)
@@ -238,13 +247,14 @@ export async function runDebate(options) {
     } else if (rounds >= 2) {
       warnings.push('第 2 轮未运行：没有可用的第 1 轮陈词')
     }
-    onUpdate({ phase: 'round2', round1, round2 })
+    onUpdate({ id, phase: 'round2', round1, round2 })
 
     let verdict = null
     let verdictRaw = null
     let verdictErrors = []
     const stances = Object.values(round1).map((speech) => speech?.stance).filter(Boolean)
 
+    const judgeStart = now()
     if (Object.keys(round1).length > 0) {
       const basePrompt = buildJudgePrompt({
         idea,
@@ -268,15 +278,16 @@ export async function runDebate(options) {
             }),
             VERDICT_SCHEMA,
             overall.signal,
+            false,
           )
         } catch (error) {
           if (userAborted) throw abortError()
           verdictErrors = [error?.message ?? '裁判调用失败']
           break
         }
-        verdictRaw = result?.structured ?? null
+        verdictRaw = asStructured(result)
         if (!verdictRaw || typeof verdictRaw !== 'object') {
-          verdictErrors = ['裁判未提交结构化裁定']
+          verdictErrors = [`裁判未提交结构化裁定（${describeMissing(result)}）`]
           continue
         }
         verdictErrors = validateVerdict(verdictRaw, { stances })
@@ -288,7 +299,8 @@ export async function runDebate(options) {
     } else {
       verdictErrors = ['没有任何辩手完成第 1 轮']
     }
-    onUpdate({ phase: 'judge', round1, round2, verdict })
+    timings.judgeMs = now() - judgeStart
+    onUpdate({ id, phase: 'judge', round1, round2, verdict })
 
     if (missingVoices.length > 0) {
       incompleteReasons.unshift(`缺少辩手陈词：${missingVoices.join('，')}`)
@@ -318,6 +330,7 @@ export async function runDebate(options) {
       round2,
       verdict,
       verdictRaw,
+      timings,
       incomplete: incompleteReasons.length > 0,
       incompleteReasons,
       warnings,
@@ -349,4 +362,39 @@ function withPrefixedClaims(speakerId, speech) {
       ...(typeof claim?.id === 'string' ? { id: `${speakerId}:${claim.id}` } : {}),
     })),
   }
+}
+
+/** Final assistant text of a subagent result. */
+function outputText(result) {
+  const blocks = Array.isArray(result?.output) ? result.output : []
+  return blocks
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join('\n')
+    .trim()
+}
+
+/**
+ * Prefer the captured structured result, then accept a JSON object the child
+ * printed as prose. The structured tool is the contract; this fallback only
+ * rescues a run whose content is otherwise lost.
+ */
+function asStructured(result) {
+  if (result?.structured && typeof result.structured === 'object') return result.structured
+  const text = outputText(result)
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start < 0 || end <= start) return undefined
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1))
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function describeMissing(result) {
+  const reason = result?.diagnostic ?? result?.stopReason ?? '未提交结构化结果'
+  const text = outputText(result).replace(/\s+/g, ' ').slice(0, 120)
+  return text ? `${reason}：${text}` : String(reason)
 }
