@@ -61,6 +61,9 @@ window.__ModuleLoader__.load({
       'changedMind.no': '立场未变',
       updated: '更新于',
       refresh: '刷新',
+      'tab.report': '报告',
+      'tab.structured': '结构化',
+      reportMissing: '该辩论没有可显示的报告。',
     }
 
     const EN = {
@@ -116,6 +119,9 @@ window.__ModuleLoader__.load({
       'changedMind.no': 'held position',
       updated: 'updated',
       refresh: 'Refresh',
+      'tab.report': 'Report',
+      'tab.structured': 'Structured',
+      reportMissing: 'No report is available for this debate.',
     }
 
     let translate = (key) => key
@@ -263,6 +269,190 @@ window.__ModuleLoader__.load({
       )
     }
 
+    const MD = {
+      root: { fontSize: 13, lineHeight: 1.7, maxWidth: 920 },
+      h1: { fontSize: 18, fontWeight: 600, margin: '18px 0 8px' },
+      h2: { fontSize: 16, fontWeight: 600, margin: '20px 0 8px' },
+      h3: { fontSize: 14, fontWeight: 600, margin: '16px 0 6px' },
+      p: { margin: '8px 0' },
+      ul: { margin: '6px 0', paddingLeft: 20 },
+      code: {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: 12,
+        background: 'var(--dsw-alias-bg-layer-2)',
+        padding: '1px 4px',
+        borderRadius: 4,
+      },
+      pre: {
+        background: 'var(--dsw-alias-bg-layer-2)',
+        border: '1px solid var(--dsw-alias-border-l1)',
+        borderRadius: 8,
+        padding: '10px 12px',
+        overflowX: 'auto',
+        fontSize: 12,
+        lineHeight: 1.5,
+        margin: '10px 0',
+      },
+      quote: {
+        borderLeft: '3px solid var(--dsw-alias-state-warn-primary)',
+        margin: '10px 0',
+        padding: '2px 0 2px 12px',
+        color: 'var(--dsw-alias-label-secondary)',
+      },
+      table: { borderCollapse: 'collapse', width: '100%', margin: '10px 0', fontSize: 12 },
+      th: {
+        border: '1px solid var(--dsw-alias-border-l1)',
+        padding: '6px 8px',
+        textAlign: 'left',
+        background: 'var(--dsw-alias-bg-layer-2)',
+        fontWeight: 600,
+      },
+      td: {
+        border: '1px solid var(--dsw-alias-border-l1)',
+        padding: '6px 8px',
+        textAlign: 'left',
+        verticalAlign: 'top',
+      },
+      hr: { border: 0, borderTop: '1px solid var(--dsw-alias-border-l1)', margin: '18px 0' },
+    }
+
+    /** Inline markdown: bold, inline code, emphasis. Everything else is text. */
+    function inlineNodes(text) {
+      return String(text ?? '')
+        .split(/(\*\*[^*]+\*\*|`[^`]+`|_[^_]+_)/g)
+        .map((part, index) => {
+          if (!part) return null
+          if (part.length > 4 && part.startsWith('**') && part.endsWith('**')) {
+            return h('strong', { key: index }, part.slice(2, -2))
+          }
+          if (part.length > 2 && part.startsWith('`') && part.endsWith('`')) {
+            return h('code', { key: index, style: MD.code }, part.slice(1, -1))
+          }
+          if (part.length > 2 && part.startsWith('_') && part.endsWith('_')) {
+            return h('em', { key: index }, part.slice(1, -1))
+          }
+          return part
+        })
+        .filter((node) => node !== null && node !== '')
+    }
+
+    /**
+     * Render the exact markdown subset our own report writer emits: headings,
+     * paragraphs, bullet lists, tables, fenced code, blockquotes, and rules.
+     * No dependency and no HTML injection: every value becomes a text node.
+     */
+    function renderMarkdown(text) {
+      const lines = String(text ?? '').split(/\r?\n/)
+      const blocks = []
+      let index = 0
+
+      while (index < lines.length) {
+        const line = lines[index]
+        if (line.trim() === '') {
+          index += 1
+          continue
+        }
+
+        if (line.trimStart().startsWith('```')) {
+          index += 1
+          const code = []
+          while (index < lines.length && !lines[index].trimStart().startsWith('```')) {
+            code.push(lines[index])
+            index += 1
+          }
+          index += 1
+          blocks.push(h('pre', { key: blocks.length, style: MD.pre },
+            h('code', { key: 'code' }, code.join('\n'))))
+          continue
+        }
+
+        const heading = /^(#{1,6})\s+(.*)$/.exec(line)
+        if (heading) {
+          const level = Math.min(heading[1].length, 3)
+          blocks.push(h(`h${level}`, {
+            key: blocks.length,
+            style: level === 1 ? MD.h1 : level === 2 ? MD.h2 : MD.h3,
+          }, inlineNodes(heading[2])))
+          index += 1
+          continue
+        }
+
+        if (/^\s*---+\s*$/.test(line)) {
+          blocks.push(h('hr', { key: blocks.length, style: MD.hr }))
+          index += 1
+          continue
+        }
+
+        if (line.trimStart().startsWith('>')) {
+          const quote = []
+          while (index < lines.length && lines[index].trimStart().startsWith('>')) {
+            quote.push(lines[index].replace(/^\s*>\s?/, ''))
+            index += 1
+          }
+          blocks.push(h('blockquote', { key: blocks.length, style: MD.quote },
+            quote.map((row, rowIndex) => h('div', { key: rowIndex }, inlineNodes(row)))))
+          continue
+        }
+
+        if (line.trimStart().startsWith('|')) {
+          const rows = []
+          while (index < lines.length && lines[index].trimStart().startsWith('|')) {
+            rows.push(lines[index])
+            index += 1
+          }
+          const cells = (row) => row.trim()
+            .replace(/^\|/, '')
+            .replace(/\|$/, '')
+            .split('|')
+            .map((cell) => cell.trim())
+          const header = cells(rows[0] ?? '')
+          const body = rows.slice(2).map(cells)
+          blocks.push(h('table', { key: blocks.length, style: MD.table },
+            h('thead', { key: 'head' },
+              h('tr', { key: 'row' }, header.map((cell, cellIndex) =>
+                h('th', { key: cellIndex, style: MD.th }, inlineNodes(cell))))),
+            h('tbody', { key: 'body' }, body.map((row, rowIndex) =>
+              h('tr', { key: rowIndex }, row.map((cell, cellIndex) =>
+                h('td', { key: cellIndex, style: MD.td }, inlineNodes(cell))))))))
+          continue
+        }
+
+        const bullet = /^(\s*)[-*]\s+(.*)$/.exec(line)
+        if (bullet) {
+          const items = []
+          while (index < lines.length) {
+            const match = /^(\s*)[-*]\s+(.*)$/.exec(lines[index])
+            if (!match) break
+            items.push({ depth: Math.min(3, Math.floor(match[1].length / 2)), text: match[2] })
+            index += 1
+          }
+          blocks.push(h('ul', { key: blocks.length, style: MD.ul },
+            items.map((item, itemIndex) => h('li', {
+              key: itemIndex,
+              style: item.depth > 0 ? { marginLeft: 16 } : undefined,
+            }, inlineNodes(item.text)))))
+          continue
+        }
+
+        const paragraph = []
+        while (index < lines.length) {
+          const current = lines[index]
+          if (current.trim() === '') break
+          if (/^(#{1,6})\s+/.test(current)) break
+          if (current.trimStart().startsWith('```')) break
+          if (current.trimStart().startsWith('>')) break
+          if (current.trimStart().startsWith('|')) break
+          if (/^\s*[-*]\s+/.test(current)) break
+          if (/^\s*---+\s*$/.test(current)) break
+          paragraph.push(current)
+          index += 1
+        }
+        blocks.push(h('p', { key: blocks.length, style: MD.p }, inlineNodes(paragraph.join(' '))))
+      }
+
+      return h('div', { style: MD.root }, blocks)
+    }
+
     function SpeakerCard({ role, entry }) {
       const round1 = entry.round1 ? entry.round1[role.id] : undefined
       const round2 = entry.round2 ? entry.round2[role.id] : undefined
@@ -355,12 +545,9 @@ window.__ModuleLoader__.load({
       ))
     }
 
-    function Detail({ record, onBack }) {
+    function RecordView({ record }) {
       const verdict = record.verdict
       return h('div', {},
-        h('button', { type: 'button', style: S.linkButton, onClick: onBack }, `← ${t('back')}`),
-        h('h2', { style: { fontSize: 16, fontWeight: 600, margin: '12px 0 4px' } }, record.title ?? record.idea ?? record.id),
-        h('div', { style: S.muted }, `${formatTime(record.createdAt)} · ${record.incomplete ? t('incomplete') : t('phase.done')}`),
         verdict
           ? h('div', { style: { ...S.card, marginTop: 14 } },
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
@@ -401,11 +588,58 @@ window.__ModuleLoader__.load({
       )
     }
 
+    function Tabs({ view, onChange }) {
+      const tab = (id, label) => h('button', {
+        key: id,
+        type: 'button',
+        onClick: () => onChange(id),
+        style: {
+          border: 0,
+          background: 'transparent',
+          padding: '6px 10px',
+          cursor: 'pointer',
+          fontSize: 12,
+          fontWeight: view === id ? 600 : 400,
+          color: view === id ? 'var(--dsw-alias-label-primary)' : 'var(--dsw-alias-label-secondary)',
+          borderBottom: view === id ? '2px solid var(--dsw-alias-brand-primary)' : '2px solid transparent',
+        },
+      }, label)
+      return h('div', {
+        role: 'tablist',
+        style: {
+          display: 'flex',
+          gap: 4,
+          borderBottom: '1px solid var(--dsw-alias-border-l1)',
+          margin: '14px 0 10px',
+        },
+      }, tab('report', t('tab.report')), tab('structured', t('tab.structured')))
+    }
+
+    function Detail({ detail, onBack }) {
+      const record = detail.record
+      const markdown = detail.markdown
+      const row = detail.row
+      const title = record?.title ?? row?.title ?? row?.id ?? ''
+      const createdAt = record?.createdAt ?? row?.createdAt
+      const incomplete = record?.incomplete ?? row?.incomplete
+      const [view, setView] = useState(markdown ? 'report' : 'structured')
+      return h('div', {},
+        h('button', { type: 'button', style: S.linkButton, onClick: onBack }, `← ${t('back')}`),
+        h('h2', { style: { fontSize: 16, fontWeight: 600, margin: '12px 0 4px' } }, title),
+        h('div', { style: S.muted }, `${formatTime(createdAt)} · ${incomplete ? t('incomplete') : t('phase.done')}`),
+        markdown && record ? h(Tabs, { view, onChange: setView }) : null,
+        view === 'report' && markdown
+          ? h('div', { style: { marginTop: markdown && record ? 4 : 14 } }, renderMarkdown(markdown))
+          : record
+            ? h(RecordView, { record })
+            : h('div', { style: { ...S.card, marginTop: 14 } }, t('reportMissing')),
+      )
+    }
+
     function DebatePanel() {
       const [data, setData] = useState(null)
       const [error, setError] = useState('')
       const [detail, setDetail] = useState(null)
-      const [markdown, setMarkdown] = useState('')
 
       const load = useCallback(async () => {
         try {
@@ -432,12 +666,8 @@ window.__ModuleLoader__.load({
       const open = useCallback(async (id) => {
         try {
           const result = await getJson(`${API}?id=${encodeURIComponent(id)}`)
-          if (result.record) {
-            setDetail(result.record)
-            setMarkdown('')
-          } else if (result.markdown) {
-            setDetail(null)
-            setMarkdown(result.markdown)
+          if (result.record || result.markdown) {
+            setDetail({ record: result.record, markdown: result.markdown, row: result.row })
           } else {
             setError(t('error'))
           }
@@ -446,16 +676,9 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
-      if (markdown) {
-        return h('div', { style: S.page }, h('div', { style: S.wrap },
-          h('button', { type: 'button', style: S.linkButton, onClick: () => setMarkdown('') }, `← ${t('back')}`),
-          h('pre', { style: { whiteSpace: 'pre-wrap', fontSize: 12, lineHeight: 1.6, marginTop: 12 } }, markdown),
-        ))
-      }
-
       if (detail) {
         return h('div', { style: S.page }, h('div', { style: S.wrap },
-          h(Detail, { record: detail, onBack: () => setDetail(null) }),
+          h(Detail, { detail, onBack: () => setDetail(null) }),
         ))
       }
 
@@ -508,6 +731,7 @@ window.__ModuleLoader__.load({
 
     return {
       inject: ['slots'],
+      __test: { renderMarkdown, Detail, RecordView },
       apply(ctx) {
         // Read the active language once, guarded: a missing locale service must
         // never turn into a boot failure. No dictionary registration, so a

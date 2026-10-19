@@ -295,7 +295,7 @@ export function apply(ctx, config = {}) {
               }
             }
             let markdown = ''
-            if (!record && row.reportPath) {
+            if (row.reportPath) {
               try {
                 markdown = await readFile(row.reportPath, 'utf8')
               } catch {
