@@ -1,0 +1,7 @@
+# Debate Stage bundle: one Host row; the engine, tool, and command live inside it.
+- insert:
+    - id: dsh-debate
+      name: '@local/dsh-debate'
+      config:
+        rounds: 2
+        timeLimitMs: 120000

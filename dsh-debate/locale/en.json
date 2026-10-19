@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Debate Stage",
+    "description": "Runs a structured cross-examination between agents and returns a checkable feasibility verdict."
+  }
+}
