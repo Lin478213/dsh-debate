@@ -40,11 +40,40 @@
 | `contextMode` | `auto` | 有路径才给辩手只读工具 |
 | `outputDir` | `.debate` | 报告相对会话工作目录的位置 |
 
+### 按角色指定模型
+
+不写 `roles` 时用内置三名辩手。要换模型或改角色，整组覆盖：
+
+```yaml
+config:
+  roles:
+    - id: advocate
+      label: { zh: 支持者, en: Advocate }
+      brief: { zh: '把想法最有说服力的一面说清楚。', en: 'Make the strongest case.' }
+      provider: deepseek-official
+      model: deepseek-flash
+    - id: skeptic
+      label: { zh: 价值质疑者, en: Value skeptic }
+      brief: { zh: '攻击需求本身。', en: 'Attack the demand.' }
+  judge:
+    provider: deepseek-official
+    model: deepseek-flash
+```
+
+`label` / `brief` 省略时用 id 占位；`provider` / `model` 省略时继承会话默认模型。
+
+## 边界
+
+- 面板只读：不支持删除、编辑、导出。
+- 同一会话同时只跑一场辩论。
+- 辩手只读：只允许 `read` / `grep` / `glob`，写入与执行由工具守卫拒绝。
+- 不联网：结论只基于想法文本、给定路径和辩手推理。
+
 ## 开发
 
 ```sh
 node --check index.js
-node --test test/
+node --test
 ```
 
 ## 状态
@@ -69,3 +98,8 @@ node --test test/
 - 真实辩论一次：64s 完成（第 1 轮 26.3s / 第 2 轮 19.6s / 裁判 18.1s），结论「有条件做」，4 条不足均带依据，第 2 轮点名反驳。
 - 超时与失败路径：不产出假结论，标记 `incomplete` 并写明原因。
 - Client 激活回归测试：缺 locale 服务时降级，不抛错、不拖垮 web boot。
+- 冷启动：重启应用后侧栏图标、主面板与历史列表均正常。
+
+## 已知未验证
+
+- 辩论进行中的面板实时刷新未在真实运行中观察（历史回看已确认）。
