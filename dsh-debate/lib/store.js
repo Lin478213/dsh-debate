@@ -62,9 +62,11 @@ export async function saveDebate(record, { cwd, outputDir = '.debate', home = ds
   const directory = path.join(cwd, outputDir)
   const fileName = reportFileName(record.createdAt ?? new Date(), record.idea ?? record.title ?? '')
   const reportPath = path.join(directory, fileName)
-  const withPath = { ...record, reportPath }
+  const recordPath = reportPath.replace(/\.md$/, '.json')
+  const withPath = { ...record, reportPath, recordPath }
   await mkdir(directory, { recursive: true })
   await writeFile(reportPath, renderReport(withPath, record.language ?? 'zh'), 'utf8')
+  await writeFile(recordPath, `${JSON.stringify(withPath, null, 2)}\n`, 'utf8')
   await appendIndex({
     id: record.id,
     sessionId: record.sessionId ?? null,
@@ -74,6 +76,7 @@ export async function saveDebate(record, { cwd, outputDir = '.debate', home = ds
     incomplete: record.incomplete === true,
     createdAt: record.createdAt,
     reportPath,
+    recordPath,
   }, home)
-  return { reportPath, fileName }
+  return { reportPath, recordPath, fileName }
 }

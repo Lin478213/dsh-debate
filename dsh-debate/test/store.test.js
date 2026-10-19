@@ -31,16 +31,21 @@ test('saveDebate writes a report and an index row', async () => {
       incomplete: false,
       verdict: { decision: 'go', summary: '可以做。', conditions: [], scores: {}, shortcomings: [], disagreements: [], nextStep: '试点', confidence: 0.6 },
     }
-    const { reportPath } = await saveDebate(record, { cwd, home })
+    const { reportPath, recordPath } = await saveDebate(record, { cwd, home })
     assert.equal(path.dirname(reportPath), path.join(cwd, '.debate'))
     const text = await readFile(reportPath, 'utf8')
     assert.match(text, /结论：做/)
+
+    const sidecar = JSON.parse(await readFile(recordPath, 'utf8'))
+    assert.equal(sidecar.id, 'd-1')
+    assert.equal(sidecar.verdict.decision, 'go')
 
     const rows = await readIndex({ home })
     assert.equal(rows.length, 1)
     assert.equal(rows[0].id, 'd-1')
     assert.equal(rows[0].decision, 'go')
     assert.equal(rows[0].reportPath, reportPath)
+    assert.equal(rows[0].recordPath, recordPath)
   } finally {
     await rm(home, { recursive: true, force: true })
     await rm(cwd, { recursive: true, force: true })

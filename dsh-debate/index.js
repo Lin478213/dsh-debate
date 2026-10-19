@@ -6,12 +6,12 @@
  * project-local markdown report plus a cross-project index row.
  */
 
-import { stat } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { runDebate } from './lib/engine.js'
 import { renderSummary } from './lib/report.js'
-import { DEFAULT_DEBATERS, DEFAULT_JUDGE } from './lib/roles.js'
-import { saveDebate } from './lib/store.js'
+import { DEFAULT_DEBATERS, DEFAULT_JUDGE, roleLabel } from './lib/roles.js'
+import { saveDebate, readIndex } from './lib/store.js'
 import { MAX_IDEA_LENGTH } from './lib/verdict.js'
 
 export const inject = ['tools', 'commands', 'subagents', 'workingDirectory']
@@ -169,7 +169,13 @@ export function apply(ctx, config = {}) {
         untrackChild: (childId) => childTools.delete(String(childId)),
         onUpdate: (snapshot) => {
           running.set(sessionKey, snapshot.id)
-          snapshots.set(sessionKey, { ...snapshot, updatedAt: Date.now() })
+          snapshots.set(sessionKey, {
+            ...snapshot,
+            title: titleOf(text),
+            idea: text,
+            sessionId: sessionKey,
+            updatedAt: Date.now(),
+          })
         },
       })
 
@@ -186,9 +192,11 @@ export function apply(ctx, config = {}) {
       try {
         const saved = await saveDebate(record, { cwd, outputDir: options.outputDir })
         record.reportPath = saved.reportPath
+        record.recordPath = saved.recordPath
       } catch (error) {
         ctx.logger?.warn?.(`debate: failed to write report: ${String(error)}`)
         record.reportPath = ''
+        record.recordPath = ''
         record.incompleteReasons.push(`报告写入失败：${error?.message ?? String(error)}`)
         record.incomplete = true
       }
@@ -262,4 +270,70 @@ export function apply(ctx, config = {}) {
       return { kind: 'success', text: renderSummary(record, options.language) }
     },
   }))
+
+  ctx.inject(['webServer'], (webCtx) => {
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/plugins/dsh-debate/api/state',
+      handler: async (req, res) => {
+        try {
+          const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+          const id = url.searchParams.get('id')
+          if (id) {
+            const rows = await readIndex({ limit: 500 })
+            const row = rows.find((candidate) => candidate.id === id)
+            if (!row) {
+              sendJson(res, 404, { error: 'debate not found' })
+              return
+            }
+            let record = null
+            if (row.recordPath) {
+              try {
+                record = JSON.parse(await readFile(row.recordPath, 'utf8'))
+              } catch {
+                record = null
+              }
+            }
+            let markdown = ''
+            if (!record && row.reportPath) {
+              try {
+                markdown = await readFile(row.reportPath, 'utf8')
+              } catch {
+                markdown = ''
+              }
+            }
+            sendJson(res, 200, { row, record, markdown })
+            return
+          }
+          const history = await readIndex({ limit: 50 })
+          const cutoff = Date.now() - 10 * 60 * 1000
+          const live = [...snapshots.values()].filter(
+            (snapshot) => snapshot.phase !== 'done' || (snapshot.updatedAt ?? 0) > cutoff,
+          )
+          sendJson(res, 200, {
+            live,
+            history,
+            roles: [
+              ...options.debaters.map((role) => ({ id: role.id, label: roleLabel(role, options.language) })),
+              { id: options.judge.id, label: roleLabel(options.judge, options.language) },
+            ],
+            language: options.language,
+            now: Date.now(),
+          })
+        } catch (error) {
+          sendJson(res, 500, { error: String(error?.message ?? error) })
+        }
+      },
+    }))
+  })
+}
+
+function sendJson(res, status, body) {
+  const payload = JSON.stringify(body)
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(payload),
+    'cache-control': 'no-store',
+  })
+  res.end(payload)
 }
